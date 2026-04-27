@@ -10,6 +10,8 @@ use gtk4::{
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 use sysinfo::System;
 
@@ -23,6 +25,7 @@ fn main() {
 
         provider.load_from_data(
             "
+            /* Main Bar Background */
             window { background-color: transparent; }
             
             label, button {
@@ -32,70 +35,79 @@ fn main() {
             }
 
             /* ==========================================
-               WORKSPACES (Single Pill Design)
+               WORKSPACES (Strict Kanagawa Palette)
                ========================================== */
             .workspaces { 
-                margin-left: 10px; margin-top: 4px; margin-bottom: 4px; 
-                background-color: #2A2A37; /* sumiInk3 - The whole container is now a pill */
-                border-radius: 12px;
-                padding: 2px 4px;
+                margin-top: 4px; margin-bottom: 4px; 
+                background-color: #16161D; 
+                border-radius: 18px;
+                padding: 4px;
             }
+            
+            /* 1. EMPTY WORKSPACES */
             .workspace-btn {
-                color: #54546D;           /* sumiInk4 (Empty) */
-                background-color: transparent; /* No background unless active/occupied */
-                padding: 2px 10px; 
-                border-radius: 8px; 
-                border: none; box-shadow: none;
+                color: #C8C093;            
+                background-color: #363646; 
+                min-width: 28px; min-height: 28px; padding: 0;
+                border-radius: 14px; border: none; box-shadow: none;
+                transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94); 
             }
-            .workspace-occupied { color: #DCD7BA; background-color: #363646; }
-            .workspace-active { color: #1F1F28; background-color: #7E9CD8; }
-
-            .center-module { color: #D27E99; font-size: 16px; font-weight: 900; }
+            
+            /* 2. OCCUPIED WORKSPACES */
+            .workspace-btn.workspace-occupied { 
+                background-color: #C0A36E; /* Kanagawa Autumn Yellow */
+                color: #16161D;            
+            }
+            
+            /* 3. ACTIVE WORKSPACE */
+            .workspace-btn.workspace-active { 
+                background-color: #76946A; /* Kanagawa Autumn Green */
+                color: #16161D;            
+                min-width: 68px;           
+                border-radius: 14px;
+            }
 
             /* ==========================================
-               SYSTEM STATS (Separate Pills Design)
+               SYSTEM STATS
                ========================================== */
-            .sys-container {
-                /* The container no longer has a background, just spacing from the edge */
-                margin-right: 10px; margin-top: 4px; margin-bottom: 4px;
-            }
+            .left-container { margin-left: 10px; margin-top: 4px; margin-bottom: 4px; }
+            .right-container { margin-right: 10px; margin-top: 4px; margin-bottom: 4px; }
             
             .sys-pill { 
-                /* Each item gets its own pill background */
-                background-color: #2A2A37; 
-                border-radius: 12px;
-                padding: 2px 12px; 
-                border: none; box-shadow: none; background-image: none;
+                background-color: #16161D; 
+                border-radius: 16px;
+                padding: 2px 14px; border: none; box-shadow: none; background-image: none;
             }
             
-            .cpu   { color: #E82424; }
-            .ram   { color: #E6C384; }
-            .bat   { color: #98BB6C; }
-            .clock-btn { color: #7FB4CA; }
-            .net-btn { color: #957FB8; font-size: 16px; }
+            .cpu       { color: #FF5D62; } 
+            .ram       { color: #E6C384; } 
+            .bat-btn   { color: #98BB6C; background: #16161D; } 
+            .clock-btn { color: #7E9CD8; background: #16161D; } 
+            .net-btn   { color: #957FB8; background: #16161D; font-size: 16px; } 
 
-            /* --- POPOVERS (Calendar & Network) --- */
+            /* --- POPOVERS & POPUPS --- */
             popover > contents {
                 background-color: #1F1F28; border: 2px solid #7E9CD8;
                 border-radius: 12px; padding: 12px;
             }
             calendar { color: #DCD7BA; }
 
-            /* --- NETWORK POPUP STYLES --- */
-            .wifi-header { color: #DCD7BA; font-size: 16px; }
+            .popup-header { color: #DCD7BA; font-size: 16px; margin-bottom: 4px; }
             .wifi-row { padding: 6px; border-radius: 8px; }
             .wifi-row:hover { background-color: #363646; }
-            
             .wifi-ssid { color: #DCD7BA; }
             
-            .wifi-connect-btn {
+            .popup-action-btn {
                 background-color: #2A2A37; color: #98BB6C;
                 border-radius: 6px; padding: 4px 12px; border: none; box-shadow: none;
             }
-            .wifi-disconnect-btn {
-                background-color: #2A2A37; color: #E82424;
-                border-radius: 6px; padding: 4px 12px; border: none; box-shadow: none;
+            .popup-action-btn-danger { color: #E82424; }
+            
+            .power-btn {
+                background-color: #2A2A37; color: #DCD7BA;
+                border-radius: 8px; padding: 8px 12px; border: none; box-shadow: none;
             }
+            .power-btn-active { background-color: #7E9CD8; color: #1F1F28; }
             ",
         );
 
@@ -125,11 +137,27 @@ fn main() {
         let main_box = CenterBox::new();
 
         // ==========================================
-        // 1. LEFT SIDE: WORKSPACES
+        // 1. LEFT SIDE: CPU & RAM
         // ==========================================
-        // Added 2px of spacing between buttons inside the pill
-        let left_box = GtkBox::new(Orientation::Horizontal, 2);
-        left_box.add_css_class("workspaces");
+        let left_box = GtkBox::new(Orientation::Horizontal, 6);
+        left_box.add_css_class("left-container");
+
+        let cpu_label = Label::new(Some(" CPU%"));
+        cpu_label.add_css_class("sys-pill");
+        cpu_label.add_css_class("cpu");
+
+        let ram_label = Label::new(Some(" RAM%"));
+        ram_label.add_css_class("sys-pill");
+        ram_label.add_css_class("ram");
+
+        left_box.append(&cpu_label);
+        left_box.append(&ram_label);
+
+        // ==========================================
+        // 2. CENTER SIDE: WORKSPACES
+        // ==========================================
+        let workspaces_box = GtkBox::new(Orientation::Horizontal, 4);
+        workspaces_box.add_css_class("workspaces");
         let mut ws_buttons = Vec::new();
 
         for i in 1..=5 {
@@ -143,27 +171,20 @@ fn main() {
                     .spawn()
                     .ok();
             });
-            left_box.append(&ws_btn);
+            workspaces_box.append(&ws_btn);
             ws_buttons.push(ws_btn);
         }
         let ws_buttons = Rc::new(ws_buttons);
 
         // ==========================================
-        // 2. CENTER SIDE
+        // 3. RIGHT SIDE: NET, BATTERY, CLOCK
         // ==========================================
-        let center_label = Label::new(Some(""));
-        center_label.add_css_class("center-module");
-
-        // ==========================================
-        // 3. RIGHT SIDE: SEPARATE PILLS
-        // ==========================================
-        // Added 6px of spacing so the individual pills don't touch each other
         let right_box = GtkBox::new(Orientation::Horizontal, 6);
-        right_box.add_css_class("sys-container");
+        right_box.add_css_class("right-container");
 
         // --- NETWORK MODULE ---
         let net_btn = Button::with_label("󰤭");
-        net_btn.add_css_class("sys-pill"); // Changed from sys-module to sys-pill
+        net_btn.add_css_class("sys-pill");
         net_btn.add_css_class("net-btn");
 
         let net_popover = Popover::new();
@@ -178,7 +199,7 @@ fn main() {
 
         let net_header = GtkBox::new(Orientation::Horizontal, 8);
         let net_title = Label::new(Some("Wi-Fi"));
-        net_title.add_css_class("wifi-header");
+        net_title.add_css_class("popup-header");
         net_title.set_hexpand(true);
         net_title.set_halign(Align::Start);
 
@@ -212,102 +233,172 @@ fn main() {
         let switch_clone = wifi_switch.clone();
 
         net_btn.connect_clicked(move |_| {
-            let is_wifi_on = String::from_utf8_lossy(
-                &std::process::Command::new("nmcli")
-                    .args(["radio", "wifi"])
-                    .output()
-                    .unwrap()
-                    .stdout,
-            )
-            .trim()
-                == "enabled";
-
-            switch_clone.set_active(is_wifi_on);
+            net_pop_clone.popup();
 
             while let Some(child) = list_box_clone.first_child() {
                 list_box_clone.remove(&child);
             }
+            list_box_clone.append(&Label::new(Some("󰤨 Scanning...")));
 
-            if is_wifi_on {
-                let mut seen = HashSet::new();
-                if let Ok(output) = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg("nmcli -t -f ACTIVE,SSID device wifi list")
-                    .output()
-                {
-                    let out = String::from_utf8_lossy(&output.stdout);
-                    for line in out.lines() {
-                        let parts: Vec<&str> = line.split(':').collect();
-                        if parts.len() >= 2 {
-                            let active = parts[0] == "yes";
-                            let ssid = parts[1].trim();
+            let (tx, rx) = mpsc::channel();
 
-                            if ssid.is_empty() || seen.contains(ssid) {
-                                continue;
+            thread::spawn(move || {
+                let is_wifi_on = String::from_utf8_lossy(
+                    &std::process::Command::new("nmcli")
+                        .args(["radio", "wifi"])
+                        .output()
+                        .unwrap()
+                        .stdout,
+                )
+                .trim()
+                    == "enabled";
+                let mut networks = Vec::new();
+
+                if is_wifi_on {
+                    let mut seen = HashSet::new();
+                    if let Ok(output) = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg("nmcli -t -f ACTIVE,SSID device wifi list")
+                        .output()
+                    {
+                        let out = String::from_utf8_lossy(&output.stdout);
+                        for line in out.lines() {
+                            let parts: Vec<&str> = line.split(':').collect();
+                            if parts.len() >= 2 {
+                                let active = parts[0] == "yes";
+                                let ssid = parts[1].trim();
+                                if !ssid.is_empty() && !seen.contains(ssid) {
+                                    seen.insert(ssid.to_string());
+                                    networks.push((ssid.to_string(), active));
+                                }
                             }
-                            seen.insert(ssid.to_string());
-
-                            let row = GtkBox::new(Orientation::Horizontal, 8);
-                            row.add_css_class("wifi-row");
-
-                            let ssid_lbl = Label::new(Some(ssid));
-                            ssid_lbl.add_css_class("wifi-ssid");
-                            ssid_lbl.set_halign(Align::Start);
-                            ssid_lbl.set_hexpand(true);
-
-                            let action_btn = Button::new();
-                            let ssid_clone = ssid.to_string();
-
-                            if active {
-                                action_btn.set_label("Connected");
-                                action_btn.add_css_class("wifi-disconnect-btn");
-                                action_btn.connect_clicked(move |_| {
-                                    std::process::Command::new("nmcli")
-                                        .args(["connection", "down", "id", &ssid_clone])
-                                        .spawn()
-                                        .ok();
-                                });
-                            } else {
-                                action_btn.set_label("Connect");
-                                action_btn.add_css_class("wifi-connect-btn");
-                                action_btn.connect_clicked(move |_| {
-                                    std::process::Command::new("nmcli")
-                                        .args(["device", "wifi", "connect", &ssid_clone])
-                                        .spawn()
-                                        .ok();
-                                });
-                            }
-
-                            row.append(&ssid_lbl);
-                            row.append(&action_btn);
-                            list_box_clone.append(&row);
                         }
                     }
                 }
-            } else {
-                let off_lbl = Label::new(Some("Wi-Fi is turned off."));
-                list_box_clone.append(&off_lbl);
-            }
+                let _ = tx.send((is_wifi_on, networks));
+            });
 
-            net_pop_clone.popup();
+            let list_box_clone2 = list_box_clone.clone();
+            let switch_clone2 = switch_clone.clone();
+            glib::timeout_add_local(Duration::from_millis(100), move || {
+                if let Ok((is_wifi_on, networks)) = rx.try_recv() {
+                    switch_clone2.set_active(is_wifi_on);
+                    while let Some(child) = list_box_clone2.first_child() {
+                        list_box_clone2.remove(&child);
+                    }
+
+                    if is_wifi_on {
+                        if networks.is_empty() {
+                            list_box_clone2.append(&Label::new(Some("No networks found.")));
+                        } else {
+                            for (ssid, active) in networks {
+                                let row = GtkBox::new(Orientation::Horizontal, 8);
+                                row.add_css_class("wifi-row");
+
+                                let ssid_lbl = Label::new(Some(&ssid));
+                                ssid_lbl.add_css_class("wifi-ssid");
+                                ssid_lbl.set_halign(Align::Start);
+                                ssid_lbl.set_hexpand(true);
+
+                                let action_btn = Button::new();
+                                let ssid_clone = ssid.to_string();
+
+                                if active {
+                                    action_btn.set_label("Disconnect");
+                                    action_btn.add_css_class("popup-action-btn");
+                                    action_btn.add_css_class("popup-action-btn-danger");
+                                    action_btn.connect_clicked(move |_| {
+                                        std::process::Command::new("nmcli")
+                                            .args(["connection", "down", "id", &ssid_clone])
+                                            .spawn()
+                                            .ok();
+                                    });
+                                } else {
+                                    action_btn.set_label("Connect");
+                                    action_btn.add_css_class("popup-action-btn");
+                                    action_btn.connect_clicked(move |_| {
+                                        std::process::Command::new("nmcli")
+                                            .args(["device", "wifi", "connect", &ssid_clone])
+                                            .spawn()
+                                            .ok();
+                                    });
+                                }
+                                row.append(&ssid_lbl);
+                                row.append(&action_btn);
+                                list_box_clone2.append(&row);
+                            }
+                        }
+                    } else {
+                        list_box_clone2.append(&Label::new(Some("Wi-Fi is turned off.")));
+                    }
+                    return ControlFlow::Break;
+                }
+                ControlFlow::Continue
+            });
         });
 
-        // Other Stats
-        let cpu_label = Label::new(Some(" CPU%"));
-        cpu_label.add_css_class("sys-pill"); // Changed to sys-pill
-        cpu_label.add_css_class("cpu");
+        // --- UPGRADED BATTERY MODULE ---
+        let bat_btn = Button::with_label(" BAT%");
+        bat_btn.add_css_class("sys-pill");
+        bat_btn.add_css_class("bat-btn");
 
-        let ram_label = Label::new(Some(" RAM%"));
-        ram_label.add_css_class("sys-pill"); // Changed to sys-pill
-        ram_label.add_css_class("ram");
+        let bat_popover = Popover::new();
+        bat_popover.set_parent(&bat_btn);
+        bat_popover.set_position(PositionType::Bottom);
+        bat_popover.set_halign(Align::End);
+        bat_popover.set_has_arrow(false);
+        bat_popover.set_offset(0, 2);
 
-        let bat_label = Label::new(Some(" BAT%"));
-        bat_label.add_css_class("sys-pill"); // Changed to sys-pill
-        bat_label.add_css_class("bat");
+        let bat_pop_box = GtkBox::new(Orientation::Vertical, 8);
+        bat_pop_box.set_size_request(200, -1);
 
-        // CALENDAR
+        let bat_title = Label::new(Some("Power Profiles"));
+        bat_title.add_css_class("popup-header");
+        bat_title.set_halign(Align::Start);
+        bat_pop_box.append(&bat_title);
+        bat_pop_box.append(&Separator::new(Orientation::Horizontal));
+
+        let btn_perf = Button::with_label(" Performance");
+        let btn_bal = Button::with_label(" Balanced");
+        let btn_save = Button::with_label(" Power Saver");
+
+        btn_perf.add_css_class("power-btn");
+        btn_bal.add_css_class("power-btn");
+        btn_save.add_css_class("power-btn");
+
+        btn_perf.connect_clicked(|_| {
+            std::process::Command::new("powerprofilesctl")
+                .args(["set", "performance"])
+                .spawn()
+                .ok();
+        });
+        btn_bal.connect_clicked(|_| {
+            std::process::Command::new("powerprofilesctl")
+                .args(["set", "balanced"])
+                .spawn()
+                .ok();
+        });
+        btn_save.connect_clicked(|_| {
+            std::process::Command::new("powerprofilesctl")
+                .args(["set", "power-saver"])
+                .spawn()
+                .ok();
+        });
+
+        bat_pop_box.append(&btn_perf);
+        bat_pop_box.append(&btn_bal);
+        bat_pop_box.append(&btn_save);
+
+        bat_popover.set_child(Some(&bat_pop_box));
+
+        let bat_pop_clone = bat_popover.clone();
+        bat_btn.connect_clicked(move |_| {
+            bat_pop_clone.popup();
+        });
+
+        // --- CALENDAR ---
         let clock_btn = Button::with_label("󱑆 00:00");
-        clock_btn.add_css_class("sys-pill"); // Changed to sys-pill
+        clock_btn.add_css_class("sys-pill");
         clock_btn.add_css_class("clock-btn");
 
         let calendar = Calendar::new();
@@ -325,20 +416,21 @@ fn main() {
         });
 
         right_box.append(&net_btn);
-        right_box.append(&cpu_label);
-        right_box.append(&ram_label);
-        right_box.append(&bat_label);
+        right_box.append(&bat_btn);
         right_box.append(&clock_btn);
 
+        // ==========================================
+        // SET FINAL LAYOUT
+        // ==========================================
         main_box.set_start_widget(Some(&left_box));
-        main_box.set_center_widget(Some(&center_label));
+        main_box.set_center_widget(Some(&workspaces_box));
         main_box.set_end_widget(Some(&right_box));
 
         window.set_child(Some(&main_box));
         window.present();
 
         // ==========================================
-        // LOOP 1: WORKSPACES
+        // WORKSPACES LOOP (Restored to the working version!)
         // ==========================================
         let buttons_clone = ws_buttons.clone();
         glib::timeout_add_local(Duration::from_millis(400), move || {
@@ -357,24 +449,58 @@ fn main() {
         });
 
         // ==========================================
-        // LOOP 2: SYSTEM STATS
+        // BACKGROUND THREAD 2: SLOW COMMANDS (Net/Power)
         // ==========================================
+        let (slow_tx, slow_rx) = mpsc::channel();
+        thread::spawn(move || {
+            loop {
+                let net_icon = get_network_icon();
+                let profile = get_power_profile();
+                let _ = slow_tx.send((net_icon, profile));
+                thread::sleep(Duration::from_secs(2));
+            }
+        });
+
         let net_clone = net_btn.clone();
+        let perf_clone = btn_perf.clone();
+        let bal_clone = btn_bal.clone();
+        let save_clone = btn_save.clone();
+
+        glib::timeout_add_local(Duration::from_millis(500), move || {
+            let mut latest = None;
+            while let Ok(data) = slow_rx.try_recv() {
+                latest = Some(data);
+            }
+
+            if let Some((net_icon, profile)) = latest {
+                net_clone.set_label(&net_icon);
+
+                perf_clone.remove_css_class("power-btn-active");
+                bal_clone.remove_css_class("power-btn-active");
+                save_clone.remove_css_class("power-btn-active");
+
+                if profile == "performance" {
+                    perf_clone.add_css_class("power-btn-active");
+                } else if profile == "balanced" {
+                    bal_clone.add_css_class("power-btn-active");
+                } else if profile == "power-saver" {
+                    save_clone.add_css_class("power-btn-active");
+                }
+            }
+            ControlFlow::Continue
+        });
+
+        // ==========================================
+        // MAIN UI LOOP (Fast updates: CPU/RAM/Bat)
+        // ==========================================
         let cpu_clone = cpu_label.clone();
         let ram_clone = ram_label.clone();
-        let bat_clone = bat_label.clone();
+        let bat_clone = bat_btn.clone();
         let clock_clone = clock_btn.clone();
-
         let mut sys = System::new_all();
-        let mut tick_counter = 0;
 
         glib::timeout_add_local(Duration::from_secs(1), move || {
             clock_clone.set_label(&Local::now().format("󱑆 %I:%M %p").to_string());
-
-            if tick_counter % 3 == 0 {
-                net_clone.set_label(&get_network_icon());
-            }
-            tick_counter += 1;
 
             sys.refresh_cpu_usage();
             let cpus = sys.cpus();
@@ -401,7 +527,7 @@ fn main() {
                 };
                 bat_text = format!("{} {}%", bat_icon, bat_cap.trim());
             }
-            bat_clone.set_text(&bat_text);
+            bat_clone.set_label(&bat_text);
 
             ControlFlow::Continue
         });
@@ -413,6 +539,17 @@ fn main() {
 // ==============================================================
 // HELPERS
 // ==============================================================
+
+fn get_power_profile() -> String {
+    if let Ok(out) = std::process::Command::new("powerprofilesctl")
+        .arg("get")
+        .output()
+    {
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    } else {
+        "balanced".to_string()
+    }
+}
 
 fn get_network_icon() -> String {
     if let Ok(output) = std::process::Command::new("nmcli")
@@ -435,6 +572,7 @@ fn get_network_icon() -> String {
     "󰤭".to_string()
 }
 
+// Restored to the properly working JSON parser!
 fn get_hyprland_workspaces() -> (i32, Vec<i32>) {
     let mut active = 1;
     let mut occupied = vec![];
