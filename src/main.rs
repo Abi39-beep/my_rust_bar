@@ -5,7 +5,7 @@ use gtk4::prelude::*;
 use gtk4::style_context_add_provider_for_display;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, Calendar, CenterBox, CssProvider,
-    Label, Orientation, Popover, PositionType, ScrolledWindow, Separator, Switch,
+    Label, Orientation, Popover, PositionType, Scale, ScrolledWindow, Separator, Switch,
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use std::collections::HashSet;
@@ -35,7 +35,7 @@ fn main() {
             }
 
             /* ==========================================
-               WORKSPACES (Strict Kanagawa Palette)
+               WORKSPACES
                ========================================== */
             .workspaces { 
                 margin-top: 4px; margin-bottom: 4px; 
@@ -47,21 +47,21 @@ fn main() {
             /* 1. EMPTY WORKSPACES */
             .workspace-btn {
                 color: #C8C093;            
-                background-color: #363646; 
+                background-color: #49443C; 
                 min-width: 28px; min-height: 28px; padding: 0;
                 border-radius: 14px; border: none; box-shadow: none;
                 transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94); 
             }
             
             /* 2. OCCUPIED WORKSPACES */
-            .workspace-btn.workspace-occupied { 
-                background-color: #C0A36E; /* Kanagawa Autumn Yellow */
+            .workspace-occupied { 
+                background-color: #C0A36E; 
                 color: #16161D;            
             }
             
             /* 3. ACTIVE WORKSPACE */
-            .workspace-btn.workspace-active { 
-                background-color: #76946A; /* Kanagawa Autumn Green */
+            .workspace-active { 
+                background-color: #76946A; 
                 color: #16161D;            
                 min-width: 68px;           
                 border-radius: 14px;
@@ -84,6 +84,8 @@ fn main() {
             .bat-btn   { color: #98BB6C; background: #16161D; } 
             .clock-btn { color: #7E9CD8; background: #16161D; } 
             .net-btn   { color: #957FB8; background: #16161D; font-size: 16px; } 
+            .bt-btn    { color: #7E9CD8; background: #16161D; font-size: 16px; } 
+            .vol-btn   { color: #C0A36E; background: #16161D; font-size: 16px; } 
 
             /* --- POPOVERS & POPUPS --- */
             popover > contents {
@@ -93,9 +95,9 @@ fn main() {
             calendar { color: #DCD7BA; }
 
             .popup-header { color: #DCD7BA; font-size: 16px; margin-bottom: 4px; }
-            .wifi-row { padding: 6px; border-radius: 8px; }
-            .wifi-row:hover { background-color: #363646; }
-            .wifi-ssid { color: #DCD7BA; }
+            .row-item { padding: 6px; border-radius: 8px; }
+            .row-item:hover { background-color: #363646; }
+            .row-name { color: #DCD7BA; }
             
             .popup-action-btn {
                 background-color: #2A2A37; color: #98BB6C;
@@ -108,6 +110,11 @@ fn main() {
                 border-radius: 8px; padding: 8px 12px; border: none; box-shadow: none;
             }
             .power-btn-active { background-color: #7E9CD8; color: #1F1F28; }
+            
+            /* Sliders */
+            scale contents trough { background-color: #2A2A37; border-radius: 4px; }
+            scale contents highlight { background-color: #7E9CD8; border-radius: 4px; }
+            scale contents slider { background-color: #DCD7BA; }
             ",
         );
 
@@ -177,7 +184,7 @@ fn main() {
         let ws_buttons = Rc::new(ws_buttons);
 
         // ==========================================
-        // 3. RIGHT SIDE: NET, BATTERY, CLOCK
+        // 3. RIGHT SIDE: NET, BT, VOL, BAT, CLOCK
         // ==========================================
         let right_box = GtkBox::new(Orientation::Horizontal, 6);
         right_box.add_css_class("right-container");
@@ -234,14 +241,12 @@ fn main() {
 
         net_btn.connect_clicked(move |_| {
             net_pop_clone.popup();
-
             while let Some(child) = list_box_clone.first_child() {
                 list_box_clone.remove(&child);
             }
             list_box_clone.append(&Label::new(Some("󰤨 Scanning...")));
 
             let (tx, rx) = mpsc::channel();
-
             thread::spawn(move || {
                 let is_wifi_on = String::from_utf8_lossy(
                     &std::process::Command::new("nmcli")
@@ -253,7 +258,6 @@ fn main() {
                 .trim()
                     == "enabled";
                 let mut networks = Vec::new();
-
                 if is_wifi_on {
                     let mut seen = HashSet::new();
                     if let Ok(output) = std::process::Command::new("sh")
@@ -286,17 +290,16 @@ fn main() {
                     while let Some(child) = list_box_clone2.first_child() {
                         list_box_clone2.remove(&child);
                     }
-
                     if is_wifi_on {
                         if networks.is_empty() {
                             list_box_clone2.append(&Label::new(Some("No networks found.")));
                         } else {
                             for (ssid, active) in networks {
                                 let row = GtkBox::new(Orientation::Horizontal, 8);
-                                row.add_css_class("wifi-row");
+                                row.add_css_class("row-item");
 
                                 let ssid_lbl = Label::new(Some(&ssid));
-                                ssid_lbl.add_css_class("wifi-ssid");
+                                ssid_lbl.add_css_class("row-name");
                                 ssid_lbl.set_halign(Align::Start);
                                 ssid_lbl.set_hexpand(true);
 
@@ -337,7 +340,225 @@ fn main() {
             });
         });
 
-        // --- UPGRADED BATTERY MODULE ---
+        // --- BLUETOOTH MODULE ---
+        let bt_btn = Button::with_label("󰂲");
+        bt_btn.add_css_class("sys-pill");
+        bt_btn.add_css_class("bt-btn");
+
+        let bt_popover = Popover::new();
+        bt_popover.set_parent(&bt_btn);
+        bt_popover.set_position(PositionType::Bottom);
+        bt_popover.set_halign(Align::End);
+        bt_popover.set_has_arrow(false);
+        bt_popover.set_offset(0, 2);
+
+        let bt_pop_box = GtkBox::new(Orientation::Vertical, 10);
+        bt_pop_box.set_size_request(280, -1);
+
+        let bt_header = GtkBox::new(Orientation::Horizontal, 8);
+        let bt_title = Label::new(Some("Bluetooth"));
+        bt_title.add_css_class("popup-header");
+        bt_title.set_hexpand(true);
+        bt_title.set_halign(Align::Start);
+
+        let bt_switch = Switch::new();
+        bt_switch.set_valign(Align::Center);
+        bt_switch.connect_state_set(|_, state| {
+            let arg = if state { "on" } else { "off" };
+            std::process::Command::new("bluetoothctl")
+                .args(["power", arg])
+                .spawn()
+                .ok();
+            glib::Propagation::Proceed
+        });
+
+        bt_header.append(&bt_title);
+        bt_header.append(&bt_switch);
+
+        let bt_list_box = GtkBox::new(Orientation::Vertical, 4);
+        let bt_scroll = ScrolledWindow::new();
+        bt_scroll.set_max_content_height(300);
+        bt_scroll.set_propagate_natural_height(true);
+        bt_scroll.set_child(Some(&bt_list_box));
+
+        bt_pop_box.append(&bt_header);
+        bt_pop_box.append(&Separator::new(Orientation::Horizontal));
+        bt_pop_box.append(&bt_scroll);
+        bt_popover.set_child(Some(&bt_pop_box));
+
+        let bt_pop_clone = bt_popover.clone();
+        let bt_list_clone = bt_list_box.clone();
+        let bt_switch_clone = bt_switch.clone();
+
+        bt_btn.connect_clicked(move |_| {
+            bt_pop_clone.popup();
+            while let Some(child) = bt_list_clone.first_child() {
+                bt_list_clone.remove(&child);
+            }
+            bt_list_clone.append(&Label::new(Some("󰂯 Loading...")));
+
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                let is_bt_on = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg("bluetoothctl show | grep 'Powered: yes'")
+                    .output()
+                    .map(|o| !o.stdout.is_empty())
+                    .unwrap_or(false);
+                let mut devices = Vec::new();
+                if is_bt_on {
+                    if let Ok(output) = std::process::Command::new("bluetoothctl")
+                        .arg("devices")
+                        .output()
+                    {
+                        let out = String::from_utf8_lossy(&output.stdout);
+                        for line in out.lines() {
+                            let parts: Vec<&str> = line.splitn(3, ' ').collect();
+                            if parts.len() == 3 && parts[0] == "Device" {
+                                let mac = parts[1].to_string();
+                                let name = parts[2].to_string();
+                                let is_connected = std::process::Command::new("sh")
+                                    .arg("-c")
+                                    .arg(&format!(
+                                        "bluetoothctl info {} | grep 'Connected: yes'",
+                                        mac
+                                    ))
+                                    .output()
+                                    .map(|o| !o.stdout.is_empty())
+                                    .unwrap_or(false);
+                                devices.push((mac, name, is_connected));
+                            }
+                        }
+                    }
+                }
+                let _ = tx.send((is_bt_on, devices));
+            });
+
+            let bt_list_clone2 = bt_list_clone.clone();
+            let bt_switch_clone2 = bt_switch_clone.clone();
+            glib::timeout_add_local(Duration::from_millis(100), move || {
+                if let Ok((is_bt_on, devices)) = rx.try_recv() {
+                    bt_switch_clone2.set_active(is_bt_on);
+                    while let Some(child) = bt_list_clone2.first_child() {
+                        bt_list_clone2.remove(&child);
+                    }
+
+                    if is_bt_on {
+                        if devices.is_empty() {
+                            bt_list_clone2.append(&Label::new(Some("No paired devices found.")));
+                        } else {
+                            for (mac, name, active) in devices {
+                                let row = GtkBox::new(Orientation::Horizontal, 8);
+                                row.add_css_class("row-item");
+
+                                let name_lbl = Label::new(Some(&name));
+                                name_lbl.add_css_class("row-name");
+                                name_lbl.set_halign(Align::Start);
+                                name_lbl.set_hexpand(true);
+
+                                let action_btn = Button::new();
+                                let mac_clone = mac.to_string();
+
+                                if active {
+                                    action_btn.set_label("Disconnect");
+                                    action_btn.add_css_class("popup-action-btn");
+                                    action_btn.add_css_class("popup-action-btn-danger");
+                                    action_btn.connect_clicked(move |_| {
+                                        std::process::Command::new("bluetoothctl")
+                                            .args(["disconnect", &mac_clone])
+                                            .spawn()
+                                            .ok();
+                                    });
+                                } else {
+                                    action_btn.set_label("Connect");
+                                    action_btn.add_css_class("popup-action-btn");
+                                    action_btn.connect_clicked(move |_| {
+                                        std::process::Command::new("bluetoothctl")
+                                            .args(["connect", &mac_clone])
+                                            .spawn()
+                                            .ok();
+                                    });
+                                }
+                                row.append(&name_lbl);
+                                row.append(&action_btn);
+                                bt_list_clone2.append(&row);
+                            }
+                        }
+                    } else {
+                        bt_list_clone2.append(&Label::new(Some("Bluetooth is turned off.")));
+                    }
+                    return ControlFlow::Break;
+                }
+                ControlFlow::Continue
+            });
+        });
+
+        // --- VOLUME & BRIGHTNESS MODULE ---
+        let vol_btn = Button::with_label(" ");
+        vol_btn.add_css_class("sys-pill");
+        vol_btn.add_css_class("vol-btn");
+
+        let vol_popover = Popover::new();
+        vol_popover.set_parent(&vol_btn);
+        vol_popover.set_position(PositionType::Bottom);
+        vol_popover.set_halign(Align::End);
+        vol_popover.set_has_arrow(false);
+        vol_popover.set_offset(0, 2);
+
+        let vol_pop_box = GtkBox::new(Orientation::Vertical, 16);
+        vol_pop_box.set_size_request(240, -1);
+
+        // Volume Row
+        let vol_row = GtkBox::new(Orientation::Horizontal, 8);
+        vol_row.append(&Label::new(Some(" ")));
+        let vol_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+        vol_scale.set_hexpand(true);
+        vol_scale.set_value(get_volume());
+
+        vol_scale.connect_value_changed(|scale| {
+            let val = scale.value();
+            std::process::Command::new("wpctl")
+                .args([
+                    "set-volume",
+                    "@DEFAULT_AUDIO_SINK@",
+                    &format!("{}%", val / 100.0),
+                ])
+                .spawn()
+                .ok();
+        });
+        vol_row.append(&vol_scale);
+
+        // Brightness Row
+        let bri_row = GtkBox::new(Orientation::Horizontal, 8);
+        bri_row.append(&Label::new(Some("󰃠 ")));
+        let bri_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+        bri_scale.set_hexpand(true);
+        bri_scale.set_value(get_brightness());
+
+        bri_scale.connect_value_changed(|scale| {
+            let val = scale.value();
+            std::process::Command::new("brightnessctl")
+                .args(["set", &format!("{}%", val)])
+                .spawn()
+                .ok();
+        });
+        bri_row.append(&bri_scale);
+
+        vol_pop_box.append(&vol_row);
+        vol_pop_box.append(&bri_row);
+        vol_popover.set_child(Some(&vol_pop_box));
+
+        let vol_pop_clone = vol_popover.clone();
+        let vol_scale_clone = vol_scale.clone();
+        let bri_scale_clone = bri_scale.clone();
+
+        vol_btn.connect_clicked(move |_| {
+            vol_scale_clone.set_value(get_volume());
+            bri_scale_clone.set_value(get_brightness());
+            vol_pop_clone.popup();
+        });
+
+        // --- BATTERY MODULE ---
         let bat_btn = Button::with_label(" BAT%");
         bat_btn.add_css_class("sys-pill");
         bat_btn.add_css_class("bat-btn");
@@ -415,7 +636,10 @@ fn main() {
             cal_pop_clone.popup();
         });
 
+        // Append to Right Box
         right_box.append(&net_btn);
+        right_box.append(&bt_btn);
+        right_box.append(&vol_btn);
         right_box.append(&bat_btn);
         right_box.append(&clock_btn);
 
@@ -430,15 +654,17 @@ fn main() {
         window.present();
 
         // ==========================================
-        // WORKSPACES LOOP (Restored to the working version!)
+        // WORKSPACES LOOP
         // ==========================================
         let buttons_clone = ws_buttons.clone();
         glib::timeout_add_local(Duration::from_millis(400), move || {
             let (active_ws, occupied_ws) = get_hyprland_workspaces();
             for (idx, btn) in buttons_clone.iter().enumerate() {
                 let ws_id = (idx + 1) as i32;
+
                 btn.remove_css_class("workspace-active");
                 btn.remove_css_class("workspace-occupied");
+
                 if ws_id == active_ws {
                     btn.add_css_class("workspace-active");
                 } else if occupied_ws.contains(&ws_id) {
@@ -449,19 +675,21 @@ fn main() {
         });
 
         // ==========================================
-        // BACKGROUND THREAD 2: SLOW COMMANDS (Net/Power)
+        // BACKGROUND THREAD: SLOW COMMANDS (Net/Power/BT)
         // ==========================================
         let (slow_tx, slow_rx) = mpsc::channel();
         thread::spawn(move || {
             loop {
                 let net_icon = get_network_icon();
                 let profile = get_power_profile();
-                let _ = slow_tx.send((net_icon, profile));
+                let bt_icon = get_bluetooth_icon();
+                let _ = slow_tx.send((net_icon, profile, bt_icon));
                 thread::sleep(Duration::from_secs(2));
             }
         });
 
         let net_clone = net_btn.clone();
+        let bt_clone = bt_btn.clone();
         let perf_clone = btn_perf.clone();
         let bal_clone = btn_bal.clone();
         let save_clone = btn_save.clone();
@@ -472,8 +700,9 @@ fn main() {
                 latest = Some(data);
             }
 
-            if let Some((net_icon, profile)) = latest {
+            if let Some((net_icon, profile, bt_icon)) = latest {
                 net_clone.set_label(&net_icon);
+                bt_clone.set_label(&bt_icon);
 
                 perf_clone.remove_css_class("power-btn-active");
                 bal_clone.remove_css_class("power-btn-active");
@@ -540,6 +769,62 @@ fn main() {
 // HELPERS
 // ==============================================================
 
+fn get_volume() -> f64 {
+    if let Ok(output) = std::process::Command::new("wpctl")
+        .args(&["get-volume", "@DEFAULT_AUDIO_SINK@"])
+        .output()
+    {
+        let out = String::from_utf8_lossy(&output.stdout);
+        if let Some(vol_str) = out.split_whitespace().nth(1) {
+            if let Ok(vol) = vol_str.parse::<f64>() {
+                return vol * 100.0;
+            }
+        }
+    }
+    50.0
+}
+
+fn get_brightness() -> f64 {
+    if let Ok(output) = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("brightnessctl -m")
+        .output()
+    {
+        let out = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = out.split(',').collect();
+        if parts.len() >= 4 {
+            let pct_str = parts[3].trim_end_matches('%');
+            if let Ok(pct) = pct_str.parse::<f64>() {
+                return pct;
+            }
+        }
+    }
+    50.0
+}
+
+fn get_bluetooth_icon() -> String {
+    let is_on = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("bluetoothctl show | grep 'Powered: yes'")
+        .output()
+        .map(|o| !o.stdout.is_empty())
+        .unwrap_or(false);
+    if !is_on {
+        return "󰂲".to_string();
+    }
+    let has_connected = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("bluetoothctl devices Connected")
+        .output()
+        .map(|o| !o.stdout.is_empty())
+        .unwrap_or(false);
+    if has_connected {
+        "󰂱".to_string()
+    } else {
+        "󰂯".to_string()
+    }
+}
+
 fn get_power_profile() -> String {
     if let Ok(out) = std::process::Command::new("powerprofilesctl")
         .arg("get")
@@ -572,7 +857,6 @@ fn get_network_icon() -> String {
     "󰤭".to_string()
 }
 
-// Restored to the properly working JSON parser!
 fn get_hyprland_workspaces() -> (i32, Vec<i32>) {
     let mut active = 1;
     let mut occupied = vec![];
